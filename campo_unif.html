@@ -1,0 +1,558 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Campo Elétrico — Barras Carregadas Finitas</title>
+  <style>
+    :root {
+      --bg: #0b1020;
+      --panel: #151c33;
+      --text: #eef3ff;
+      --muted: #b8c2e0;
+      --accent: #7cc7ff;
+      --line: rgba(255,255,255,0.08);
+      --pos: #ff6b6b;
+      --neg: #5aa9ff;
+      --neu: #d9dde7;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: Inter, system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+      background: linear-gradient(180deg, #0a0f1d 0%, #0f1730 100%);
+      color: var(--text);
+    }
+    .page {
+      max-width: 1280px;
+      margin: 0 auto;
+      padding: 20px;
+    }
+    h1 {
+      margin: 0 0 8px;
+      font-size: 1.9rem;
+    }
+    .subtitle {
+      color: var(--muted);
+      margin-bottom: 18px;
+      line-height: 1.45;
+    }
+    .section {
+      display: grid;
+      grid-template-columns: 320px 1fr;
+      gap: 18px;
+      align-items: start;
+    }
+    .panel, .viewer {
+      background: rgba(255,255,255,0.03);
+      border: 1px solid var(--line);
+      border-radius: 18px;
+      padding: 16px;
+      box-shadow: 0 10px 30px rgba(0,0,0,0.25);
+    }
+    .viewer-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 10px;
+      color: var(--muted);
+      font-size: 0.95rem;
+    }
+    canvas {
+      width: 100%;
+      display: block;
+      border-radius: 14px;
+      background: radial-gradient(circle at center, #10192f 0%, #0b1020 75%);
+      border: 1px solid rgba(255,255,255,0.06);
+    }
+    .group {
+      margin-bottom: 16px;
+      padding: 12px;
+      border-radius: 14px;
+      background: rgba(255,255,255,0.03);
+      border: 1px solid rgba(255,255,255,0.06);
+    }
+    .group h3 {
+      margin: 0 0 10px;
+      font-size: 1rem;
+    }
+    label {
+      display: flex;
+      justify-content: space-between;
+      gap: 10px;
+      margin-bottom: 6px;
+      color: var(--muted);
+      font-size: 0.92rem;
+    }
+    input[type="range"] {
+      width: 100%;
+      accent-color: var(--accent);
+    }
+    .value {
+      min-width: 48px;
+      text-align: right;
+      color: var(--text);
+      font-variant-numeric: tabular-nums;
+    }
+    .legend {
+      display: flex;
+      gap: 14px;
+      flex-wrap: wrap;
+      color: var(--muted);
+      font-size: 0.9rem;
+      margin: 10px 0 12px;
+    }
+    .dot {
+      width: 12px;
+      height: 12px;
+      border-radius: 50%;
+      display: inline-block;
+      margin-right: 6px;
+      vertical-align: middle;
+    }
+    .hint {
+      color: var(--muted);
+      font-size: 0.92rem;
+      line-height: 1.45;
+    }
+    .buttons {
+      display: flex;
+      gap: 10px;
+      margin-top: 12px;
+      flex-wrap: wrap;
+    }
+    button {
+      border: 1px solid rgba(255,255,255,0.1);
+      background: #1d2746;
+      color: var(--text);
+      border-radius: 12px;
+      padding: 10px 14px;
+      cursor: pointer;
+      font-size: 0.95rem;
+    }
+    button:hover { filter: brightness(1.08); }
+    @media (max-width: 980px) {
+      .section { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+  <div class="page">
+    <h1>Campo elétrico de duas barras verticais finitas</h1>
+    <div class="subtitle">
+      Aqui as barras são tratadas como <strong>segmentos finitos uniformemente carregados</strong>. Assim, o campo não aparece apenas entre elas: ele também surge ao redor e nas extremidades. Isso ajuda a evidenciar que o caso de campo perfeitamente uniforme entre placas é uma idealização associada a barras ou placas infinitas.
+    </div>
+
+    <div class="section">
+      <div class="panel" id="controls"></div>
+      <div class="viewer">
+        <div class="viewer-header">
+          <strong>Barras finitas</strong>
+          <span>Linhas de campo com efeito de borda</span>
+        </div>
+        <canvas id="canvas" width="980" height="620"></canvas>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    class FiniteBarFieldSim {
+      constructor() {
+        this.canvas = document.getElementById('canvas');
+        this.ctx = this.canvas.getContext('2d');
+        this.controls = document.getElementById('controls');
+        this.dpr = window.devicePixelRatio || 1;
+
+        this.leftLambda = 6.0;
+        this.rightLambda = -6.0;
+
+        this.fieldScale = 12000;
+        this.softening = 10;
+        this.step = 2.4;
+        this.maxSteps = 2200;
+        this.seedBase = 10;
+        this.barWidth = 12;
+        this.barMarginX = 0.24;
+        this.barHeightFrac = 0.74;
+        this.integrationSlices = 80;
+        this.captureDistance = 12;
+
+        this.buildControls();
+        this.resize();
+        window.addEventListener('resize', () => this.resize());
+        this.render();
+      }
+
+      get bars() {
+        const h = this.height;
+        const y1 = h * (0.5 - this.barHeightFrac / 2);
+        const y2 = h * (0.5 + this.barHeightFrac / 2);
+        return [
+          {
+            name: 'Barra esquerda',
+            x: this.width * this.barMarginX,
+            y1,
+            y2,
+            lambda: this.leftLambda,
+          },
+          {
+            name: 'Barra direita',
+            x: this.width * (1 - this.barMarginX),
+            y1,
+            y2,
+            lambda: this.rightLambda,
+          }
+        ];
+      }
+
+      resize() {
+        const rect = this.canvas.getBoundingClientRect();
+        const cssWidth = rect.width || 980;
+        const aspect = 620 / 980;
+        this.canvas.width = Math.round(cssWidth * this.dpr);
+        this.canvas.height = Math.round(cssWidth * aspect * this.dpr);
+        this.canvas.style.height = `${Math.round(cssWidth * aspect)}px`;
+        this.ctx.setTransform(1, 0, 0, 1, 0, 0);
+        this.ctx.scale(this.dpr, this.dpr);
+        this.width = cssWidth;
+        this.height = cssWidth * aspect;
+        this.render();
+      }
+
+      buildControls() {
+        this.controls.innerHTML = `
+          <div class="legend">
+            <span><span class="dot" style="background: var(--pos)"></span>densidade positiva</span>
+            <span><span class="dot" style="background: var(--neg)"></span>densidade negativa</span>
+            <span><span class="dot" style="background: var(--neu)"></span>densidade nula</span>
+          </div>
+
+          <div class="group">
+            <h3>Barra esquerda</h3>
+            <label>Densidade linear de carga <span class="value" id="left-value">${this.leftLambda.toFixed(1)}</span></label>
+            <input type="range" min="-10" max="10" step="0.1" value="${this.leftLambda}" id="left-slider">
+          </div>
+
+          <div class="group">
+            <h3>Barra direita</h3>
+            <label>Densidade linear de carga <span class="value" id="right-value">${this.rightLambda.toFixed(1)}</span></label>
+            <input type="range" min="-10" max="10" step="0.1" value="${this.rightLambda}" id="right-slider">
+          </div>
+
+          <div class="buttons">
+            <button id="reset-btn" type="button">Caso padrão</button>
+            <button id="equal-btn" type="button">Mesma polaridade</button>
+            <button id="opposite-btn" type="button">Polaridades opostas</button>
+          </div>
+
+          <div class="hint">
+            As linhas são calculadas a partir do campo de <strong>segmentos finitos</strong>. Portanto, perto das extremidades elas se curvam e escapam para fora da região central, destacando o efeito de borda.
+          </div>
+        `;
+
+        this.controls.querySelector('#left-slider').addEventListener('input', (e) => {
+          this.leftLambda = Number(e.target.value);
+          this.controls.querySelector('#left-value').textContent = this.leftLambda.toFixed(1);
+          this.render();
+        });
+
+        this.controls.querySelector('#right-slider').addEventListener('input', (e) => {
+          this.rightLambda = Number(e.target.value);
+          this.controls.querySelector('#right-value').textContent = this.rightLambda.toFixed(1);
+          this.render();
+        });
+
+        this.controls.querySelector('#reset-btn').addEventListener('click', () => {
+          this.leftLambda = 6.0;
+          this.rightLambda = -6.0;
+          this.syncControls();
+          this.render();
+        });
+
+        this.controls.querySelector('#equal-btn').addEventListener('click', () => {
+          this.leftLambda = 6.0;
+          this.rightLambda = 6.0;
+          this.syncControls();
+          this.render();
+        });
+
+        this.controls.querySelector('#opposite-btn').addEventListener('click', () => {
+          this.leftLambda = 6.0;
+          this.rightLambda = -6.0;
+          this.syncControls();
+          this.render();
+        });
+      }
+
+      syncControls() {
+        this.controls.querySelector('#left-slider').value = this.leftLambda;
+        this.controls.querySelector('#right-slider').value = this.rightLambda;
+        this.controls.querySelector('#left-value').textContent = this.leftLambda.toFixed(1);
+        this.controls.querySelector('#right-value').textContent = this.rightLambda.toFixed(1);
+      }
+
+      colorForLambda(lambda) {
+        if (Math.abs(lambda) < 0.05) return getComputedStyle(document.documentElement).getPropertyValue('--neu').trim();
+        return lambda > 0
+          ? getComputedStyle(document.documentElement).getPropertyValue('--pos').trim()
+          : getComputedStyle(document.documentElement).getPropertyValue('--neg').trim();
+      }
+
+      distanceToBar(x, y, bar) {
+        const yc = Math.max(bar.y1, Math.min(bar.y2, y));
+        return Math.hypot(x - bar.x, y - yc);
+      }
+
+      closestBarHit(x, y) {
+        for (const bar of this.bars) {
+          if (Math.abs(bar.lambda) < 0.05) continue;
+          if (this.distanceToBar(x, y, bar) < this.captureDistance + this.barWidth / 2) {
+            return bar;
+          }
+        }
+        return null;
+      }
+
+      getField(x, y) {
+        let ex = 0;
+        let ey = 0;
+
+        for (const bar of this.bars) {
+          const lambda = bar.lambda;
+          if (Math.abs(lambda) < 0.001) continue;
+
+          const length = bar.y2 - bar.y1;
+          const n = this.integrationSlices;
+          const dySlice = length / n;
+          const dq = lambda / n;
+
+          for (let i = 0; i < n; i++) {
+            const ys = bar.y1 + (i + 0.5) * dySlice;
+            const dx = x - bar.x;
+            const dy = y - ys;
+            const r2 = dx * dx + dy * dy + this.softening;
+            const r = Math.sqrt(r2);
+            const factor = (this.fieldScale * dq) / (r2 * r);
+            ex += factor * dx;
+            ey += factor * dy;
+          }
+        }
+
+        return { ex, ey };
+      }
+
+      generateSeeds() {
+        const seeds = [];
+        const offset = this.barWidth / 2 + 10;
+
+        for (const bar of this.bars) {
+          if (Math.abs(bar.lambda) < 0.05) continue;
+          const count = Math.max(10, Math.round(this.seedBase * Math.abs(bar.lambda)));
+
+          for (let i = 0; i < count; i++) {
+            const t = (i + 0.5) / count;
+            const y = bar.y1 + t * (bar.y2 - bar.y1);
+
+            seeds.push({ x: bar.x - offset, y, source: bar, side: 'left', sign: Math.sign(bar.lambda) });
+            seeds.push({ x: bar.x + offset, y, source: bar, side: 'right', sign: Math.sign(bar.lambda) });
+          }
+
+          const endCount = Math.max(6, Math.round(0.55 * count));
+          const r = offset;
+          for (let i = 0; i < endCount; i++) {
+            const angTop = Math.PI + (Math.PI * i / Math.max(1, endCount - 1));
+            seeds.push({
+              x: bar.x + r * Math.cos(angTop),
+              y: bar.y1 + r * Math.sin(angTop),
+              source: bar,
+              side: 'top',
+              sign: Math.sign(bar.lambda)
+            });
+
+            const angBottom = Math.PI * i / Math.max(1, endCount - 1);
+            seeds.push({
+              x: bar.x + r * Math.cos(angBottom),
+              y: bar.y2 + r * Math.sin(angBottom),
+              source: bar,
+              side: 'bottom',
+              sign: Math.sign(bar.lambda)
+            });
+          }
+        }
+
+        return seeds;
+      }
+
+      traceLine(seed, integrationDirection) {
+        const pts = [];
+        let x = seed.x;
+        let y = seed.y;
+        let endType = 'none';
+        let hitBar = null;
+
+        for (let i = 0; i < this.maxSteps; i++) {
+          pts.push({ x, y });
+          const f1 = this.getField(x, y);
+          const mag1 = Math.hypot(f1.ex, f1.ey);
+          if (mag1 < 1e-9) {
+            endType = 'stagnation';
+            break;
+          }
+
+          const ux1 = integrationDirection * f1.ex / mag1;
+          const uy1 = integrationDirection * f1.ey / mag1;
+          const xm = x + 0.5 * this.step * ux1;
+          const ym = y + 0.5 * this.step * uy1;
+
+          const f2 = this.getField(xm, ym);
+          const mag2 = Math.hypot(f2.ex, f2.ey);
+          if (mag2 < 1e-9) {
+            endType = 'stagnation';
+            break;
+          }
+
+          x += this.step * integrationDirection * f2.ex / mag2;
+          y += this.step * integrationDirection * f2.ey / mag2;
+
+          if (x < -12 || x > this.width + 12 || y < -12 || y > this.height + 12) {
+            pts.push({ x, y });
+            endType = 'boundary';
+            break;
+          }
+
+          const hit = this.closestBarHit(x, y);
+          if (hit && hit !== seed.source) {
+            pts.push({ x, y });
+            endType = 'bar';
+            hitBar = hit;
+            break;
+          }
+        }
+
+        return { pts, seedSource: seed.source, endType, hitBar };
+      }
+
+      orientLine(result) {
+        const { pts, seedSource, endType, hitBar } = result;
+        if (!pts || pts.length < 2) return null;
+
+        const seedSign = Math.sign(seedSource.lambda);
+        const hitSign = hitBar ? Math.sign(hitBar.lambda) : 0;
+
+        if (seedSign > 0) return pts;
+
+        if (seedSign < 0) {
+          if (endType === 'bar' && hitSign > 0) return [...pts].reverse();
+          if (endType === 'boundary' || endType === 'stagnation') return [...pts].reverse();
+        }
+
+        return pts;
+      }
+
+      drawBackground() {
+        const ctx = this.ctx;
+        ctx.clearRect(0, 0, this.width, this.height);
+
+        ctx.save();
+        ctx.strokeStyle = 'rgba(255,255,255,0.05)';
+        ctx.lineWidth = 1;
+        const gap = 36;
+        for (let x = 0; x <= this.width; x += gap) {
+          ctx.beginPath();
+          ctx.moveTo(x, 0);
+          ctx.lineTo(x, this.height);
+          ctx.stroke();
+        }
+        for (let y = 0; y <= this.height; y += gap) {
+          ctx.beginPath();
+          ctx.moveTo(0, y);
+          ctx.lineTo(this.width, y);
+          ctx.stroke();
+        }
+        ctx.restore();
+      }
+
+      drawFieldLines() {
+        const ctx = this.ctx;
+        const seeds = this.generateSeeds();
+
+        ctx.save();
+        ctx.strokeStyle = 'rgba(148, 214, 255, 0.98)';
+        ctx.lineWidth = 1.6;
+        ctx.shadowColor = 'rgba(124, 199, 255, 0.35)';
+        ctx.shadowBlur = 6;
+
+        for (const seed of seeds) {
+          const integrationDirection = seed.sign > 0 ? 1 : -1;
+          const raw = this.traceLine(seed, integrationDirection);
+          const pts = this.orientLine(raw);
+          if (!pts || pts.length < 2) continue;
+
+          ctx.beginPath();
+          ctx.moveTo(pts[0].x, pts[0].y);
+          for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i].x, pts[i].y);
+          ctx.stroke();
+
+          if (pts.length > 12) {
+            const k = Math.max(2, Math.floor(pts.length * 0.22));
+            const a = pts[k - 1];
+            const b = pts[k];
+            this.drawArrowHead(b.x, b.y, Math.atan2(b.y - a.y, b.x - a.x));
+          }
+        }
+
+        ctx.restore();
+      }
+
+      drawArrowHead(x, y, angle) {
+        const ctx = this.ctx;
+        const s = 7;
+        ctx.beginPath();
+        ctx.moveTo(x, y);
+        ctx.lineTo(x - s * Math.cos(angle - 0.45), y - s * Math.sin(angle - 0.45));
+        ctx.lineTo(x - s * Math.cos(angle + 0.45), y - s * Math.sin(angle + 0.45));
+        ctx.closePath();
+        ctx.fillStyle = 'rgba(180, 230, 255, 0.95)';
+        ctx.fill();
+      }
+
+      drawBars() {
+        const ctx = this.ctx;
+        for (const bar of this.bars) {
+          const color = this.colorForLambda(bar.lambda);
+          ctx.save();
+          ctx.strokeStyle = color;
+          ctx.lineWidth = this.barWidth;
+          ctx.lineCap = 'round';
+          ctx.shadowColor = color;
+          ctx.shadowBlur = 16;
+          ctx.beginPath();
+          ctx.moveTo(bar.x, bar.y1);
+          ctx.lineTo(bar.x, bar.y2);
+          ctx.stroke();
+
+          ctx.shadowBlur = 0;
+          ctx.fillStyle = '#ffffff';
+          ctx.font = 'bold 16px system-ui, sans-serif';
+          ctx.textAlign = 'center';
+          ctx.textBaseline = 'bottom';
+          const label = Math.abs(bar.lambda) < 0.05 ? '0' : (bar.lambda > 0 ? '+' : '−');
+          ctx.fillText(label, bar.x, bar.y1 - 12);
+          ctx.font = '13px system-ui, sans-serif';
+          ctx.fillText(bar.lambda.toFixed(1), bar.x, bar.y2 + 24);
+          ctx.restore();
+        }
+      }
+
+      render() {
+        if (!this.width || !this.height) return;
+        this.drawBackground();
+        this.drawFieldLines();
+        this.drawBars();
+      }
+    }
+
+    new FiniteBarFieldSim();
+  </script>
+</body>
+</html>
